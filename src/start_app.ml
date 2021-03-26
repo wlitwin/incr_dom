@@ -226,7 +226,9 @@ let start
        Vdom.Event.Define (struct
          module Action = App.Action
 
-         let handle action = Pipe.write_without_pushback w action
+         let handle action =
+             Pipe.write_without_pushback w action;
+             !Ui_incr.callback()
        end)
      in
      let visibility = Visibility.create_as_dirty () in
@@ -235,7 +237,10 @@ let start
         use the [Vdom.Event.Viewport_changed] event, we are notified. *)
      let module Viewport_handler =
        Vdom.Event.Define_visibility (struct
-         let handle = viewport_changed
+         let handle =
+             let z = viewport_changed in
+             !Ui_incr.callback();
+             z
        end)
      in
      let app =
@@ -383,13 +388,24 @@ let start
      (* We use [request_animation_frame] so that browser tells us where it's time to
         refresh the UI. All the actions will be processed and the changes propagated
         to the DOM in one frame. *)
-     let rec callback () =
+     let dirty = ref false in
+     let rec raf_callback () =
+       dirty := false;
        if Deferred.is_determined stop
        then ()
        else (
          perform_update r;
-         request_animation_frame callback)
+         if !dirty then (
+             raf_callback()
+         )
+       )
      in
+     Ui_incr.callback := (fun () ->
+        if not !dirty then (
+            dirty := true;
+            request_animation_frame raf_callback
+        );
+     );
      (* We want the root element to start out focused, so perform an initial
         update/render, then immediately focus the root (unless a non-body element already
         has focus).  This focusing can't happen inside of the `callback` because then it
@@ -398,6 +414,6 @@ let start
      (match Js.Opt.to_option Dom_html.document##.activeElement with
       | Some el -> if Js.Opt.test (Dom_html.CoerceTo.body el) then refocus_root_element ()
       | None -> refocus_root_element ());
-     request_animation_frame callback;
+     request_animation_frame raf_callback;
      Deferred.never ())
 ;;
