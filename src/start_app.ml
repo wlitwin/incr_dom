@@ -389,17 +389,48 @@ let start
         refresh the UI. All the actions will be processed and the changes propagated
         to the DOM in one frame. *)
      let dirty = ref false in
+     let next_alarm = ref None in
+
+     let clear_alarm () =
+         match !next_alarm with
+         | None -> ()
+         | Some value ->
+            Dom_html.clearTimeout value;
+            next_alarm := None
+     in
+
      let rec raf_callback () =
        dirty := false;
+       clear_alarm();
        if Deferred.is_determined stop
        then ()
        else (
          perform_update r;
          if !dirty then (
              raf_callback()
+         ) else (
+             let alarm = Incr.Clock.next_alarm_fires_at Ui_incr.clock in
+             match alarm with
+             | None -> ()
+             | Some time ->
+                let diff = Time_ns.abs_diff (Time_ns.now()) time |> Time_ns.Span.to_ms in
+
+                if Float.(diff <= 16.) then (
+                    request_animation_frame raf_callback
+                ) else (
+                    let current_context = Async_kernel_scheduler.current_execution_context () in
+                    let callback () =
+                      let callback_result =
+                        Async_kernel_scheduler.within_context current_context raf_callback
+                      in
+                      ignore (callback_result : (unit, unit) Result.t)
+                    in
+                    next_alarm := Some (Dom_html.setTimeout callback diff);
+                )
          )
        )
      in
+
      Ui_incr.callback := (fun () ->
         if not !dirty then (
             dirty := true;
